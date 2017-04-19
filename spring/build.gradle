@@ -1,0 +1,110 @@
+
+apply plugin: 'java'
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+apply plugin: 'org.springframework.boot'
+apply plugin: 'com.bmuschko.docker-java-application'
+
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+buildscript {
+	repositories {
+        jcenter()
+    }
+    dependencies {
+		classpath(
+			'org.springframework.boot:spring-boot-gradle-plugin:1.5.2.RELEASE',
+			'com.bmuschko:gradle-docker-plugin:3.0.1'
+        )
+    }
+}
+
+jar {
+    baseName = 'gs-spring-boot'
+    version =  '0.1.0'
+}
+
+
+dependencies {
+    compile("org.springframework.boot:spring-boot-starter-web:1.5.2.RELEASE")
+    // tag::actuator[]
+    compile("org.springframework.boot:spring-boot-starter-actuator:1.5.2.RELEASE")
+    // end::actuator[]
+    // tag::tests[]
+    testCompile("org.springframework.boot:spring-boot-starter-test:1.5.2.RELEASE")
+    // end::tests[]
+}
+
+
+def image = "springboot"
+def repo = image
+
+task copyJar(type: Copy) {
+    dependsOn   'jar'
+    from        "build/libs/gs-spring-boot-0.1.0.jar"
+    into        'build/docker'
+    rename { String fileName ->
+        fileName.replace("-${project.version}", "")
+    }
+}
+
+apply plugin: 'com.bmuschko.docker-remote-api'
+
+docker {
+    //mac hack socat -d TCP-LISTEN:2376,range=127.0.0.1/32,reuseaddr,fork UNIX:/var/run/docker.sock
+    url = 'tcp://127.0.0.1:2376'
+}
+
+import com.bmuschko.gradle.docker.tasks.image.Dockerfile
+task createDockerfile(type: Dockerfile) {
+    dependsOn jar
+
+    destFile = project.file './Dockerfile'
+  
+    from 'java:8'
+    volume '/tmp'
+    addFile 'build/libs/gs-spring-boot-0.1.0.jar', 'app-docker.jar'
+  	runCommand 'bash -c "touch /app-docker.jar"'
+	exposePort 8080
+	entryPoint 'java', '-Djava.security.egd=file:/dev/./urandom', '-jar', '/app-docker.jar'
+    
+}
+
+import com.bmuschko.gradle.docker.tasks.image.DockerBuildImage
+task buildDockerImage(type: DockerBuildImage) {
+    dependsOn createDockerfile
+    inputDir = createDockerfile.destFile.parentFile
+    tag = image
+    remove = true
+}
+ 
+import com.bmuschko.gradle.docker.tasks.container.DockerCreateContainer
+task createContainer(type: DockerCreateContainer) {
+    imageId = image
+    cmd = ['true'] as String[]
+}
+
+import com.bmuschko.gradle.docker.tasks.image.DockerCommitImage
+task commitImage(type: DockerCommitImage) {
+    dependsOn createContainer
+    repository = repo
+    targetContainerId { createContainer.getContainerId() }
+}
+
+import com.bmuschko.gradle.docker.tasks.image.DockerPushImage
+task pushImage(type: DockerPushImage) {
+    dependsOn commitImage
+    imageName = image
+}
+
+import com.bmuschko.gradle.docker.tasks.image.DockerPullImage
+task pullImage(type: DockerPullImage) {
+    repository = repo
+    tag = "$version"
+} 
+  
+build.dependsOn buildDockerImage
+
+
